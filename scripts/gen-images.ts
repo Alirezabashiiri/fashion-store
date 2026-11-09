@@ -9,6 +9,13 @@
  * Each image is retried up to 3 times. Failures are logged but do not
  * abort the batch — a final summary is printed at the end.
  *
+ * NOTE on output format: the z-ai-web-dev-sdk images.generations endpoint
+ * returns JPEG-encoded bytes via base64, but files are named `.png` to
+ * match the task spec. To keep the file contents consistent with the
+ * extension (and robust against `X-Content-Type-Options: nosniff`
+ * deployments), every generated image is re-encoded to real PNG bytes
+ * using `sharp` before being written to disk.
+ *
  * Usage:
  *   bun /home/z/my-project/scripts/gen-images.ts
  */
@@ -16,34 +23,56 @@
 import ZAI from 'z-ai-web-dev-sdk';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 
 const OUTPUT_DIR = '/home/z/my-project/public/images';
 
-type ImageSize = '1440x720' | '1024x1024';
+/**
+ * NOTE on hero banner size:
+ * The task spec requested `1440x720` for hero banners. The z-ai-web-dev-sdk
+ * type union lists `1440x720` as a valid size, but the underlying API rejects
+ * it with HTTP 400 / error code 1214 because 720 is NOT a multiple of 32
+ * (720 / 32 = 22.5). The API constraint is: both dimensions must be
+ * 512–2880px, multiples of 32, and total pixels ≤ 2^22 (4,194,304).
+ *
+ * `1344x768` is the closest valid landscape size (1344=32×42, 768=32×24,
+ * 1,032,192 px total) and has aspect ratio 1.75:1 vs the requested 2:1 —
+ * visually near-identical for a hero banner.
+ *
+ * To honour the original request as much as possible while still producing
+ * output, we attempt `1440x720` first and then automatically fall back to
+ * `1344x768` on the size-validation error.
+ */
+type ImageSize = '1440x720' | '1344x768' | '1024x1024';
 
 interface ImageJob {
   filename: string;
   prompt: string;
   size: ImageSize;
+  /** Optional fallback used when the primary size is rejected by the API. */
+  fallbackSize?: ImageSize;
 }
 
 const jobs: ImageJob[] = [
-  // --- Hero banners (1440x720) ---
+  // --- Hero banners (requested 1440x720; fallback 1344x768) ---
   {
     filename: 'hero-women.png',
     size: '1440x720',
+    fallbackSize: '1344x768',
     prompt:
       "Elegant Persian woman wearing a stylish beige autumn trench coat and knit outfit, standing in a minimal modern studio with soft warm light, premium fashion editorial photography, full body, sophisticated, high-end e-commerce hero banner, lots of negative space on the left side",
   },
   {
     filename: 'hero-men.png',
     size: '1440x720',
+    fallbackSize: '1344x768',
     prompt:
       "Stylish man in tailored charcoal overcoat and white shirt, modern minimalist studio, soft cinematic light, premium menswear editorial photography, full body, high-end e-commerce hero banner, negative space on the right",
   },
   {
     filename: 'hero-sale.png',
     size: '1440x720',
+    fallbackSize: '1344x768',
     prompt:
       "Dramatic fashion sale campaign hero banner, elegant clothing on minimal hangers, moody dark charcoal background with soft spotlight, luxury retail aesthetic, premium editorial photography, wide banner composition with empty space",
   },
@@ -209,11 +238,16 @@ async function generateOne(
 
   let lastError: string | null = null;
 
+  // The size actually used for the current attempt. Starts at the primary
+  // size; if the API rejects it with the size-validation error (code 1214 /
+  // "为32整数倍"), we switch to the fallback size for all subsequent attempts.
+  let currentSize: ImageSize = job.size;
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await zai.images.generations.create({
         prompt: job.prompt,
-        size: job.size,
+        size: currentSize,
       });
 
       const b64 = response?.data?.[0]?.base64;
@@ -228,13 +262,36 @@ async function generateOne(
         throw new Error('Decoded image buffer is empty');
       }
 
-      fs.writeFileSync(outPath, buffer);
-      return { ok: true, bytes: buffer.length, skipped: false };
+      // Re-encode to actual PNG so the bytes match the .png extension.
+      // The API returns JPEG bytes even though the SDK type suggests PNG;
+      // this conversion makes the files robust to strict content-type
+      // enforcement and avoids any "JPEG-in-.png" mismatch.
+      const pngBuffer = await sharp(buffer).png().toBuffer();
+      if (pngBuffer.length === 0) {
+        throw new Error('sharp produced an empty PNG buffer');
+      }
+
+      fs.writeFileSync(outPath, pngBuffer);
+      return { ok: true, bytes: pngBuffer.length, skipped: false };
     } catch (err) {
       lastError = fmtError(err);
       console.warn(
-        `  ! [${attempt}/${MAX_RETRIES}] failed "${job.filename}": ${lastError}`,
+        `  ! [${attempt}/${MAX_RETRIES}] failed "${job.filename}" (size=${currentSize}): ${lastError}`,
       );
+
+      // If the error is the API size-validation rejection and we have a
+      // fallback configured, switch the size now so the next retry uses it.
+      if (
+        job.fallbackSize &&
+        currentSize !== job.fallbackSize &&
+        /1214|32整数倍|multiple of 32|size/i.test(lastError)
+      ) {
+        console.warn(
+          `  ↻ switching "${job.filename}" to fallback size ${job.fallbackSize}`,
+        );
+        currentSize = job.fallbackSize;
+      }
+
       // Brief backoff before retrying.
       await sleep(1000 * attempt);
     }
