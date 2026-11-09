@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { getProductById, formatToman, toFaDigits } from "@/lib/data";
 import { ProductCard } from "../ProductCard";
@@ -17,6 +17,8 @@ import {
   Clock,
   XCircle,
   CreditCard,
+  Shield,
+  Loader2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -24,11 +26,21 @@ type Tab = "orders" | "addresses" | "wishlist" | "profile";
 
 export function DashboardView() {
   const isAuthed = useStore((s) => s.isAuthed);
+  const authChecked = useStore((s) => s.authChecked);
   const userName = useStore((s) => s.userName);
   const phone = useStore((s) => s.phone);
+  const isStaff = useStore((s) => s.isStaff);
   const setView = useStore((s) => s.setView);
-  const logout = useStore((s) => s.logout);
+  const logoutApi = useStore((s) => s.logoutApi);
   const [tab, setTab] = useState<Tab>("orders");
+
+  if (!authChecked) {
+    return (
+      <div dir="rtl" className="mx-auto flex max-w-[1400px] items-center justify-center px-4 py-20">
+        <Loader2 className="h-6 w-6 animate-spin text-ink-soft" />
+      </div>
+    );
+  }
 
   if (!isAuthed) {
     return (
@@ -37,10 +49,7 @@ export function DashboardView() {
           <UserIcon className="mx-auto mb-3 h-12 w-12 text-ink-soft/40" />
           <h2 className="text-lg font-bold text-ink">وارد نشده‌اید</h2>
           <p className="mt-1 text-sm text-ink-soft">برای مشاهده پنل کاربری وارد شوید</p>
-          <button
-            onClick={() => setView("auth")}
-            className="mt-4 rounded-md bg-ink px-5 py-2.5 text-sm font-medium text-white"
-          >
+          <button onClick={() => setView("auth")} className="mt-4 rounded-md bg-ink px-5 py-2.5 text-sm font-medium text-white">
             ورود / ثبت‌نام
           </button>
         </div>
@@ -57,7 +66,6 @@ export function DashboardView() {
 
   return (
     <div dir="rtl" className="mx-auto max-w-[1400px] px-4 py-6">
-      {/* Header */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-white p-4">
         <div className="flex items-center gap-3">
           <span className="grid h-12 w-12 place-items-center rounded-full bg-ink text-white font-bold text-lg">
@@ -68,20 +76,27 @@ export function DashboardView() {
             <p className="text-xs text-ink-soft" dir="ltr">{phone}</p>
           </div>
         </div>
-        <button
-          onClick={() => {
-            logout();
-            setView("home");
-          }}
-          className="flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-2 text-xs font-medium text-ink-soft hover:text-sale hover:border-sale"
-        >
-          <LogOut className="h-3.5 w-3.5" />
-          خروج از حساب
-        </button>
+        <div className="flex items-center gap-2">
+          {isStaff && (
+            <button
+              onClick={() => setView("admin")}
+              className="flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-xs font-medium text-white hover:bg-ink/90"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              پنل مدیریت
+            </button>
+          )}
+          <button
+            onClick={() => logoutApi()}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-2 text-xs font-medium text-ink-soft hover:text-sale hover:border-sale"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            خروج از حساب
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        {/* Sidebar nav */}
         <aside className="lg:sticky lg:top-24 lg:h-fit">
           <nav className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-white p-2 lg:flex-col lg:overflow-visible">
             {tabs.map((t) => (
@@ -89,9 +104,7 @@ export function DashboardView() {
                 key={t.k}
                 onClick={() => setTab(t.k)}
                 className={`flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition ${
-                  tab === t.k
-                    ? "bg-ink text-white"
-                    : "text-ink-soft hover:bg-surface-alt hover:text-ink"
+                  tab === t.k ? "bg-ink text-white" : "text-ink-soft hover:bg-surface-alt hover:text-ink"
                 }`}
               >
                 <t.icon className="h-4 w-4" />
@@ -101,7 +114,6 @@ export function DashboardView() {
           </nav>
         </aside>
 
-        {/* Content */}
         <div>
           {tab === "orders" && <OrdersTab />}
           {tab === "addresses" && <AddressesTab />}
@@ -113,16 +125,36 @@ export function DashboardView() {
   );
 }
 
+const STATUS_META: Record<string, { label: string; icon: typeof Clock; color: string }> = {
+  pending: { label: "در انتظار پرداخت", icon: Clock, color: "text-amber-600 bg-amber-50" },
+  paid: { label: "پرداخت‌شده", icon: CheckCircle2, color: "text-emerald-600 bg-emerald-50" },
+  preparing: { label: "در حال آماده‌سازی", icon: Package, color: "text-sky-600 bg-sky-50" },
+  shipped: { label: "ارسال شده", icon: Truck, color: "text-sky-600 bg-sky-50" },
+  delivered: { label: "تحویل شده", icon: CheckCircle2, color: "text-emerald-600 bg-emerald-50" },
+  cancelled: { label: "لغو شده", icon: XCircle, color: "text-sale bg-sale-soft" },
+};
+
 function OrdersTab() {
   const orders = useStore((s) => s.orders);
+  const loadOrders = useStore((s) => s.loadOrders);
   const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
 
-  const statusMeta = {
-    processing: { label: "در حال پردازش", icon: Clock, color: "text-amber-600 bg-amber-50" },
-    shipped: { label: "ارسال شده", icon: Truck, color: "text-sky-600 bg-sky-50" },
-    delivered: { label: "تحویل شده", icon: CheckCircle2, color: "text-emerald-600 bg-emerald-50" },
-    cancelled: { label: "لغو شده", icon: XCircle, color: "text-sale bg-sale-soft" },
-  } as const;
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await loadOrders();
+      setLoading(false);
+    })();
+  }, [loadOrders]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-ink-soft" />
+      </div>
+    );
+  }
 
   if (orders.length === 0) {
     return <EmptyState title="سفارشی ثبت نشده" desc="هنوز خریدی انجام نداده‌اید" cta="شروع خرید" />;
@@ -131,7 +163,9 @@ function OrdersTab() {
   return (
     <div className="space-y-3">
       {orders.map((o) => {
-        const meta = statusMeta[o.status];
+        const meta = STATUS_META[o.status] ?? STATUS_META.pending;
+        const date = new Date(o.createdAt).toLocaleDateString("fa-IR");
+        const items = o.items ?? [];
         return (
           <div key={o.id} className="rounded-lg border border-border bg-white p-4">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
@@ -140,25 +174,21 @@ function OrdersTab() {
                   <meta.icon className="h-3.5 w-3.5" />
                   {meta.label}
                 </span>
-                <span className="text-xs text-ink-soft">تاریخ: {o.date}</span>
+                <span className="text-xs text-ink-soft">تاریخ: {date}</span>
               </div>
-              <span className="text-xs text-ink-soft" dir="ltr">#{o.id}</span>
+              <span className="text-xs text-ink-soft" dir="ltr">#{o.code}</span>
             </div>
 
-            {o.items.length > 0 ? (
+            {items.length > 0 ? (
               <div className="mt-3 space-y-2">
-                {o.items.map((it, i) => (
+                {items.map((it, i) => (
                   <div key={i} className="flex items-center gap-3 text-xs">
                     <img src={it.image} alt="" className="h-12 w-12 rounded-md border border-border object-cover" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium text-ink">{it.name}</div>
-                      <div className="text-[10px] text-ink-soft">
-                        {it.colorName} / {it.size} × {toFaDigits(it.qty)}
-                      </div>
+                      <div className="text-[10px] text-ink-soft">{it.colorName} / {it.size} × {toFaDigits(it.qty)}</div>
                     </div>
-                    <span className="font-medium text-ink">
-                      {toFaDigits(formatToman(it.price * it.qty))} ت
-                    </span>
+                    <span className="font-medium text-ink">{toFaDigits(formatToman(it.price * it.qty))} ت</span>
                   </div>
                 ))}
               </div>
@@ -166,28 +196,24 @@ function OrdersTab() {
               <p className="mt-3 text-xs text-ink-soft">جزئیات اقلام در حال آماده‌سازی است.</p>
             )}
 
+            {o.trackingCode && (
+              <div className="mt-2 rounded bg-surface-alt px-3 py-1.5 text-[11px] text-ink-soft">
+                کد رهگیری پستی: <span className="font-medium text-ink" dir="ltr">{o.trackingCode}</span>
+              </div>
+            )}
+
             <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
               <div className="text-sm">
                 <span className="text-ink-soft">مبلغ کل: </span>
                 <span className="font-bold text-ink">{toFaDigits(formatToman(o.total))} تومان</span>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => toast({ title: "فاکتور دانلود شد", description: `سفارش ${o.id}` })}
-                  className="rounded-md border border-border bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-alt"
-                >
-                  <CreditCard className="ml-1 inline h-3.5 w-3.5" />
-                  فاکتور
-                </button>
-                {o.status === "delivered" && (
-                  <button
-                    onClick={() => toast({ title: "به سبد خرید اضافه شد" })}
-                    className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-white"
-                  >
-                    خرید مجدد
-                  </button>
-                )}
-              </div>
+              <button
+                onClick={() => toast({ title: "فاکتور آماده شد", description: `سفارش ${o.code}` })}
+                className="rounded-md border border-border bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-alt"
+              >
+                <CreditCard className="ml-1 inline h-3.5 w-3.5" />
+                فاکتور
+              </button>
             </div>
           </div>
         );
@@ -198,21 +224,33 @@ function OrdersTab() {
 
 function AddressesTab() {
   const addresses = useStore((s) => s.addresses);
-  const addAddress = useStore((s) => s.addAddress);
-  const removeAddress = useStore((s) => s.removeAddress);
+  const loadAddresses = useStore((s) => s.loadAddresses);
+  const addAddressApi = useStore((s) => s.addAddressApi);
+  const removeAddressApi = useStore((s) => s.removeAddressApi);
   const { toast } = useToast();
   const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ recipient: "", phone: "", province: "تهران", city: "تهران", postal: "", detail: "" });
 
-  const save = () => {
+  useEffect(() => {
+    loadAddresses();
+  }, [loadAddresses]);
+
+  const save = async () => {
     if (!form.recipient || !form.phone || !form.postal || !form.detail) {
       toast({ title: "همه فیلدها را پر کنید" });
       return;
     }
-    addAddress(form);
-    setForm({ recipient: "", phone: "", province: "تهران", city: "تهران", postal: "", detail: "" });
-    setShow(false);
-    toast({ title: "آدرس ذخیره شد" });
+    setSaving(true);
+    const ok = await addAddressApi(form);
+    setSaving(false);
+    if (ok) {
+      setForm({ recipient: "", phone: "", province: "تهران", city: "تهران", postal: "", detail: "" });
+      setShow(false);
+      toast({ title: "آدرس ذخیره شد" });
+    } else {
+      toast({ title: "خطا در ذخیره آدرس" });
+    }
   };
 
   return (
@@ -238,7 +276,7 @@ function AddressesTab() {
           <input value={form.postal} onChange={(e) => setForm({ ...form, postal: e.target.value })} placeholder="کد پستی" dir="ltr" className="h-9 w-full rounded-md border border-border bg-white px-3 text-xs focus:outline-none focus:border-ink" />
           <textarea value={form.detail} onChange={(e) => setForm({ ...form, detail: e.target.value })} placeholder="آدرس کامل" rows={2} className="w-full rounded-md border border-border bg-white px-3 py-2 text-xs focus:outline-none focus:border-ink" />
           <div className="flex gap-2">
-            <button onClick={save} className="rounded-md bg-ink px-4 py-2 text-xs font-medium text-white">ذخیره</button>
+            <button onClick={save} disabled={saving} className="rounded-md bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-60">{saving ? "در حال ذخیره..." : "ذخیره"}</button>
             <button onClick={() => setShow(false)} className="rounded-md border border-border bg-white px-4 py-2 text-xs text-ink-soft">انصراف</button>
           </div>
         </div>
@@ -255,7 +293,7 @@ function AddressesTab() {
                 <div className="mt-0.5 text-ink-soft/70">کد پستی: {toFaDigits(a.postal)}</div>
               </div>
             </div>
-            <button onClick={() => removeAddress(a.id)} className="text-ink-soft hover:text-sale">
+            <button onClick={() => removeAddressApi(a.id)} className="text-ink-soft hover:text-sale">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
@@ -295,47 +333,23 @@ function ProfileTab() {
       <div className="space-y-3">
         <div>
           <label className="mb-1.5 block text-xs font-medium text-ink">نام و نام خانوادگی</label>
-          <input
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white"
-          />
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white" />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-ink">شماره موبایل</label>
-            <input
-              value={form.phone}
-              disabled
-              dir="ltr"
-              className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm text-ink-soft"
-            />
+            <input value={form.phone} disabled dir="ltr" className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm text-ink-soft" />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-ink">کد ملی</label>
-            <input
-              value={form.nationalId}
-              onChange={(e) => setForm({ ...form, nationalId: e.target.value })}
-              placeholder="جهت صدور فاکتور رسمی"
-              dir="ltr"
-              className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white"
-            />
+            <input value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} placeholder="جهت صدور فاکتور رسمی" dir="ltr" className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white" />
           </div>
         </div>
         <div>
           <label className="mb-1.5 block text-xs font-medium text-ink">ایمیل</label>
-          <input
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            placeholder="example@email.com"
-            dir="ltr"
-            className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white"
-          />
+          <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="example@email.com" dir="ltr" className="h-10 w-full rounded-md border border-border bg-surface-alt px-3 text-sm focus:outline-none focus:border-ink focus:bg-white" />
         </div>
-        <button
-          onClick={() => toast({ title: "اطلاعات ذخیره شد" })}
-          className="rounded-md bg-ink px-5 py-2.5 text-sm font-medium text-white"
-        >
+        <button onClick={() => toast({ title: "اطلاعات ذخیره شد" })} className="rounded-md bg-ink px-5 py-2.5 text-sm font-medium text-white">
           ذخیره تغییرات
         </button>
       </div>
@@ -349,10 +363,7 @@ function EmptyState({ title, desc, cta }: { title: string; desc: string; cta: st
     <div className="rounded-lg border border-dashed border-border bg-white p-10 text-center">
       <p className="text-sm font-bold text-ink">{title}</p>
       <p className="mt-1 text-xs text-ink-soft">{desc}</p>
-      <button
-        onClick={() => setView("home")}
-        className="mt-3 rounded-md bg-ink px-4 py-2 text-xs font-medium text-white"
-      >
+      <button onClick={() => setView("home")} className="mt-3 rounded-md bg-ink px-4 py-2 text-xs font-medium text-white">
         {cta}
       </button>
     </div>

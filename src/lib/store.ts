@@ -2,7 +2,8 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Product, View } from "./data";
+import type { View } from "./data";
+import { api } from "./api";
 
 export interface CartItem {
   productId: string;
@@ -24,26 +25,49 @@ export interface Address {
   city: string;
   postal: string;
   detail: string;
+  isDefault?: boolean;
 }
 
-export interface Order {
+export interface OrderRecord {
   id: string;
-  date: string;
-  status: "processing" | "shipped" | "delivered" | "cancelled";
+  code: string;
+  status: string;
   total: number;
-  items: CartItem[];
+  subtotal?: number;
+  discount?: number;
+  shipping?: number;
+  trackingCode?: string | null;
+  shippingMethod?: string | null;
+  createdAt: string;
+  items?: CartItem[];
+}
+
+export interface PaymentResult {
+  status: "success" | "failed" | "cancelled";
+  orderCode?: string;
+  refId?: string;
+  reason?: string;
+}
+
+interface AuthedUser {
+  id: string;
+  phone: string;
+  fullName: string | null;
+  isStaff: boolean;
 }
 
 interface AppState {
   // navigation
   view: View;
   activeProductId: string | null;
-  plpSlug: string | null; // category slug for listing
+  plpSlug: string | null;
   plpTitle: string | null;
+  adminTab: "dashboard" | "products" | "orders" | "discounts";
 
   setView: (v: View) => void;
   openProduct: (id: string) => void;
   openListing: (slug: string, title: string) => void;
+  setAdminTab: (t: AppState["adminTab"]) => void;
 
   // cart
   cart: CartItem[];
@@ -60,27 +84,35 @@ interface AppState {
   toggleWishlist: (id: string) => void;
   isWishlisted: (id: string) => boolean;
 
-  // applied promo code
+  // promo (client-side preview; backend re-validates at checkout)
   promoCode: string | null;
-  promoDiscount: number; // toman off
+  promoDiscount: number;
   applyPromo: (code: string) => { ok: boolean; message: string };
   clearPromo: () => void;
 
-  // auth
+  // auth (API-backed)
   isAuthed: boolean;
+  authChecked: boolean;
   phone: string | null;
   userName: string;
-  login: (phone: string, name?: string) => void;
-  logout: () => void;
+  isStaff: boolean;
+  refreshAuth: () => Promise<void>;
+  setAuthedUser: (u: AuthedUser) => void;
+  logoutApi: () => Promise<void>;
 
-  // addresses
+  // addresses (loaded from API)
   addresses: Address[];
-  addAddress: (a: Omit<Address, "id">) => void;
-  removeAddress: (id: string) => void;
+  loadAddresses: () => Promise<void>;
+  addAddressApi: (a: Omit<Address, "id">) => Promise<boolean>;
+  removeAddressApi: (id: string) => Promise<void>;
 
-  // orders
-  orders: Order[];
-  addOrder: (o: Order) => void;
+  // orders (loaded from API)
+  orders: OrderRecord[];
+  loadOrders: () => Promise<void>;
+
+  // payment result (from ?payment= callback)
+  paymentResult: PaymentResult | null;
+  setPaymentResult: (r: PaymentResult | null) => void;
 }
 
 const PROMOS: Record<string, number> = {
@@ -96,6 +128,7 @@ export const useStore = create<AppState>()(
       activeProductId: null,
       plpSlug: null,
       plpTitle: null,
+      adminTab: "dashboard",
 
       setView: (v) => {
         set({ view: v });
@@ -109,6 +142,7 @@ export const useStore = create<AppState>()(
         set({ view: "plp", plpSlug: slug, plpTitle: title });
         if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
       },
+      setAdminTab: (t) => set({ adminTab: t }),
 
       cart: [],
       addToCart: (item, qty = 1) =>
@@ -128,9 +162,7 @@ export const useStore = create<AppState>()(
         }),
       updateQty: (index, qty) =>
         set((s) => {
-          if (qty <= 0) {
-            return { cart: s.cart.filter((_, i) => i !== index) };
-          }
+          if (qty <= 0) return { cart: s.cart.filter((_, i) => i !== index) };
           const next = [...s.cart];
           next[index] = { ...next[index], qty };
           return { cart: next };
@@ -139,12 +171,8 @@ export const useStore = create<AppState>()(
         set((s) => ({ cart: s.cart.filter((_, i) => i !== index) })),
       clearCart: () => set({ cart: [], promoCode: null, promoDiscount: 0 }),
       cartCount: () => get().cart.reduce((n, i) => n + i.qty, 0),
-      cartSubtotal: () =>
-        get().cart.reduce((sum, i) => sum + i.price * i.qty, 0),
-      cartDiscount: () => {
-        // discount already baked into item price; report promo discount instead
-        return get().promoDiscount;
-      },
+      cartSubtotal: () => get().cart.reduce((sum, i) => sum + i.price * i.qty, 0),
+      cartDiscount: () => get().promoDiscount,
 
       wishlist: [],
       toggleWishlist: (id) =>
@@ -163,54 +191,92 @@ export const useStore = create<AppState>()(
           const sub = get().cartSubtotal();
           const off = Math.round(sub * PROMOS[c]);
           set({ promoCode: c, promoDiscount: off });
-          return { ok: true, message: `کد تخفیف اعمال شد (${Math.round(PROMOS[c] * 100)}٪)` };
+          return { ok: true, message: `کد تخفیف اعمال شد (${Math.round(PROMOS[c] * 100)}٪) — در زمان پرداخت نهایی اعتبارسنجی می‌شود` };
         }
         return { ok: false, message: "کد تخفیف نامعتبر است" };
       },
       clearPromo: () => set({ promoCode: null, promoDiscount: 0 }),
 
+      // auth
       isAuthed: false,
+      authChecked: false,
       phone: null,
       userName: "",
-      login: (phone, name) =>
-        set({ isAuthed: true, phone, userName: name || "کاربر لوکسا" }),
-      logout: () => set({ isAuthed: false, phone: null, view: "home" }),
+      isStaff: false,
+      refreshAuth: async () => {
+        try {
+          const data = await api.me();
+          const u = data.user;
+          set({
+            isAuthed: true,
+            authChecked: true,
+            phone: u.phone,
+            userName: u.fullName || "کاربر لوکسا",
+            isStaff: u.isStaff,
+          });
+        } catch {
+          set({ isAuthed: false, authChecked: true, phone: null, userName: "", isStaff: false });
+        }
+      },
+      setAuthedUser: (u) =>
+        set({
+          isAuthed: true,
+          authChecked: true,
+          phone: u.phone,
+          userName: u.fullName || "کاربر لوکسا",
+          isStaff: u.isStaff,
+        }),
+      logoutApi: async () => {
+        try {
+          await api.logout();
+        } catch {
+          /* ignore */
+        }
+        set({ isAuthed: false, authChecked: true, phone: null, userName: "", isStaff: false, view: "home" });
+      },
 
-      addresses: [
-        {
-          id: "addr-1",
-          recipient: "کاربر لوکسا",
-          phone: "09120000000",
-          province: "تهران",
-          city: "تهران",
-          postal: "1234567890",
-          detail: "خیابان ولیعصر، نرسیده به پارک‌وی، پلاک ۱۲۰، واحد ۳",
-        },
-      ],
-      addAddress: (a) =>
-        set((s) => ({
-          addresses: [...s.addresses, { ...a, id: `addr-${Date.now()}` }],
-        })),
-      removeAddress: (id) =>
-        set((s) => ({ addresses: s.addresses.filter((x) => x.id !== id) })),
+      // addresses
+      addresses: [],
+      loadAddresses: async () => {
+        try {
+          const data = await api.listAddresses();
+          set({ addresses: data.addresses });
+        } catch {
+          /* not authed */
+        }
+      },
+      addAddressApi: async (a) => {
+        try {
+          const data = await api.addAddress(a);
+          set((s) => ({ addresses: [data.address, ...s.addresses] }));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      removeAddressApi: async (id) => {
+        try {
+          await api.deleteAddress(id);
+          set((s) => ({ addresses: s.addresses.filter((x) => x.id !== id) }));
+        } catch {
+          /* ignore */
+        }
+      },
 
-      orders: [
-        {
-          id: "LX-10234",
-          date: "۱۴۰۳/۰۸/۱۲",
-          status: "delivered",
-          total: 4380000,
-          items: [],
-        },
-        {
-          id: "LX-10501",
-          date: "۱۴۰۳/۰۹/۰۳",
-          status: "shipped",
-          total: 1890000,
-          items: [],
-        },
-      ],
-      addOrder: (o) => set((s) => ({ orders: [o, ...s.orders] })),
+      // orders
+      orders: [],
+      loadOrders: async () => {
+        try {
+          const data = await api.listOrders();
+          set({ orders: data.orders });
+        } catch {
+          /* not authed */
+        }
+      },
+
+      // payment result
+      paymentResult: null,
+      setPaymentResult: (r) => set({ paymentResult: r }),
     }),
     {
       name: "luxa-store",
@@ -220,8 +286,7 @@ export const useStore = create<AppState>()(
         isAuthed: s.isAuthed,
         phone: s.phone,
         userName: s.userName,
-        addresses: s.addresses,
-        orders: s.orders,
+        isStaff: s.isStaff,
         promoCode: s.promoCode,
         promoDiscount: s.promoDiscount,
       }),

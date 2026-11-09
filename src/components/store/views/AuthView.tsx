@@ -2,11 +2,12 @@
 
 import { useState, useRef } from "react";
 import { useStore } from "@/lib/store";
+import { api, ApiError } from "@/lib/api";
 import { Smartphone, KeyRound, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export function AuthView() {
-  const login = useStore((s) => s.login);
+  const setAuthedUser = useStore((s) => s.setAuthedUser);
   const setView = useStore((s) => s.setView);
   const { toast } = useToast();
 
@@ -15,27 +16,51 @@ export function AuthView() {
   const [otp, setOtp] = useState(["", "", "", "", ""]);
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
   const [remember, setRemember] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [demoCode, setDemoCode] = useState<string | null>(null);
 
-  const sendOtp = (e: React.FormEvent) => {
+  const sendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!/^09\d{9}$/.test(phone.replace(/\s/g, ""))) {
+    const clean = phone.replace(/\s/g, "");
+    if (!/^09\d{9}$/.test(clean)) {
       toast({ title: "شماره موبایل نامعتبر است", description: "فرمت: 09123456789" });
       return;
     }
-    setStage("otp");
-    toast({ title: "کد یکبار مصرف ارسال شد", description: `کد تستی: ۱۲۳۴۵` });
-    setTimeout(() => inputs.current[0]?.focus(), 100);
+    setLoading(true);
+    try {
+      const data = await api.otpRequest(clean);
+      setDemoCode(data.demoCode ?? null);
+      setStage("otp");
+      toast({
+        title: "کد یکبار مصرف ارسال شد",
+        description: data.demoCode ? `کد تستی: ${data.demoCode}` : "کد به شماره شما پیامک شد",
+      });
+      setTimeout(() => inputs.current[0]?.focus(), 100);
+    } catch (err) {
+      toast({ title: "خطا در ارسال کد" });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const verifyOtp = (e: React.FormEvent) => {
+  const verifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (otp.join("").length !== 5) {
       toast({ title: "کد را کامل وارد کنید" });
       return;
     }
-    login(phone, remember ? "کاربر لوکسا" : undefined);
-    toast({ title: "ورود موفقیت‌آمیز بود", description: "خوش آمدید" });
-    setView("dashboard");
+    setLoading(true);
+    try {
+      const data = await api.otpVerify(phone.replace(/\s/g, ""), otp.join(""));
+      setAuthedUser(data.user);
+      toast({ title: "ورود موفقیت‌آمیز بود", description: "خوش آمدید" });
+      setView("dashboard");
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "کد نادرست است";
+      toast({ title: "خطا در ورود", description: msg });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const setDigit = (i: number, v: string) => {
@@ -87,12 +112,15 @@ export function AuthView() {
                   <input
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="09123456789"
+                    placeholder="09120000000"
                     dir="ltr"
                     inputMode="tel"
                     className="h-11 w-full rounded-lg border border-border bg-surface-alt pr-10 pl-4 text-sm text-ink focus:outline-none focus:border-ink focus:bg-white"
                   />
                 </div>
+                <p className="mt-1.5 text-[11px] text-ink-soft/70">
+                  برای تست: 09120000000 (کاربر) یا 09000000000 (مدیر)
+                </p>
               </div>
 
               <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-soft">
@@ -107,9 +135,10 @@ export function AuthView() {
 
               <button
                 type="submit"
-                className="w-full rounded-lg bg-ink py-3 text-sm font-bold text-white hover:bg-ink/90"
+                disabled={loading}
+                className="w-full rounded-lg bg-ink py-3 text-sm font-bold text-white hover:bg-ink/90 disabled:opacity-60"
               >
-                دریافت کد یکبار مصرف
+                {loading ? "در حال ارسال..." : "دریافت کد یکبار مصرف"}
               </button>
 
               <p className="text-center text-[11px] leading-5 text-ink-soft">
@@ -119,10 +148,11 @@ export function AuthView() {
           ) : (
             <form onSubmit={verifyOtp} className="space-y-4">
               <div className="text-center">
-                <p className="text-xs text-ink-soft">
-                  کد ۵ رقمی به شماره
-                </p>
+                <p className="text-xs text-ink-soft">کد ۵ رقمی به شماره</p>
                 <p className="mt-0.5 text-sm font-bold text-ink" dir="ltr">{phone}</p>
+                {demoCode && (
+                  <p className="mt-1 text-[11px] text-sale">کد تستی: {demoCode}</p>
+                )}
               </div>
 
               <div className="flex justify-center gap-2" dir="ltr" onPaste={onPaste}>
@@ -144,10 +174,11 @@ export function AuthView() {
 
               <button
                 type="submit"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-ink py-3 text-sm font-bold text-white hover:bg-ink/90"
+                disabled={loading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-ink py-3 text-sm font-bold text-white hover:bg-ink/90 disabled:opacity-60"
               >
                 <KeyRound className="h-4 w-4" />
-                تأیید و ورود
+                {loading ? "در حال تأیید..." : "تأیید و ورود"}
               </button>
 
               <div className="flex items-center justify-between text-xs">
@@ -160,7 +191,15 @@ export function AuthView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => toast({ title: "کد مجدداً ارسال شد" })}
+                  onClick={async () => {
+                    try {
+                      const data = await api.otpRequest(phone.replace(/\s/g, ""));
+                      setDemoCode(data.demoCode ?? null);
+                      toast({ title: "کد مجدداً ارسال شد" });
+                    } catch {
+                      toast({ title: "خطا در ارسال مجدد" });
+                    }
+                  }}
                   className="text-ink hover:underline"
                 >
                   ارسال مجدد کد

@@ -113,7 +113,7 @@ export function Header() {
         <div className="flex items-center gap-1 sm:gap-2">
           {/* Auth */}
           <button
-            onClick={() => setView("auth")}
+            onClick={() => setView(isAuthed ? "dashboard" : "auth")}
             className="flex flex-col items-center gap-0.5 rounded-md px-2 py-1 text-ink hover:bg-surface-alt"
           >
             <User className="h-5 w-5" />

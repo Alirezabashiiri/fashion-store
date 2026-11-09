@@ -8,7 +8,9 @@ export type View =
   | "cart"
   | "checkout"
   | "auth"
-  | "dashboard";
+  | "dashboard"
+  | "admin"
+  | "payment-result";
 
 export interface ColorOption {
   name: string; // Persian name
