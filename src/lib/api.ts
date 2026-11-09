@@ -1,6 +1,12 @@
 "use client";
 
-// Thin fetch wrapper. Same-origin requests include the HttpOnly auth cookie automatically.
+// Thin fetch wrapper.
+// Same-origin requests include the HttpOnly auth cookie automatically.
+// Set NEXT_PUBLIC_API_BASE_URL to point to an external backend (e.g. Django).
+//   empty  → use built-in Next.js API routes (default)
+//   http://localhost:8000 → use the Django backend in /backend
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -12,11 +18,17 @@ export class ApiError extends Error {
   }
 }
 
+function buildUrl(url: string): string {
+  // Only prefix API calls; never rewrite absolute URLs (e.g. payment redirects).
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  return API_BASE ? `${API_BASE}${url}` : url;
+}
+
 export async function apiFetch<T = any>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(buildUrl(url), {
     ...options,
     headers: {
       "Content-Type": "application/json",

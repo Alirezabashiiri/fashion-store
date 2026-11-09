@@ -1,0 +1,92 @@
+{% load static %}<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>فاکتور رسمی — لوکسا</title>
+<style>
+  * { font-family: Vazirmatn, Tahoma, sans-serif; box-sizing: border-box; }
+  body { background: #f8f9fa; margin: 0; padding: 20px; color: #1a1a1a; }
+  .invoice { max-width: 800px; margin: 0 auto 24px; background: #fff;
+             border: 1px solid #ececec; border-radius: 8px; padding: 32px; }
+  .header { display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 2px solid #1a1a1a; padding-bottom: 16px; margin-bottom: 20px; }
+  .brand { font-size: 22px; font-weight: 700; }
+  .brand span { color: #e53935; }
+  .title { font-size: 18px; font-weight: 700; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .box { background: #f8f9fa; border-radius: 6px; padding: 12px; font-size: 12px; }
+  .box b { color: #4a4a4a; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; }
+  th { background: #1a1a1a; color: #fff; padding: 8px; text-align: right; }
+  td { padding: 8px; border-bottom: 1px solid #ececec; }
+  .totals { margin-left: auto; width: 280px; font-size: 13px; }
+  .totals .row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .totals .grand { border-top: 2px solid #1a1a1a; margin-top: 8px; padding-top: 8px;
+                   font-weight: 700; font-size: 15px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 9999px; font-size: 11px; }
+  @media print { body { background: #fff; padding: 0; } .invoice { border: none; } }
+</style>
+</head>
+<body>
+{% for order in orders %}
+<div class="invoice">
+  <div class="header">
+    <div class="brand">لوکسا <span>LUXA</span></div>
+    <div class="title">فاکتور رسمی خرید</div>
+  </div>
+
+  <div class="meta">
+    <div class="box">
+      <b>فروشنده:</b> فروشگاه آنلاین لوکسا<br>
+      نماد اعتماد الکترونیکی
+    </div>
+    <div class="box">
+      <b>خریدار:</b> {{ order.user.full_name|default:order.user.phone }}<br>
+      <b>تلفن:</b> {{ order.user.phone }}
+      {% if order.user.national_id %}<br><b>کد ملی:</b> {{ order.user.national_id }}{% endif %}
+    </div>
+  </div>
+
+  {% if order.address_snapshot %}
+  <div class="box" style="margin-bottom:16px">
+    <b>آدرس ارسال:</b>
+    {{ order.address_snapshot.province }}، {{ order.address_snapshot.city }}،
+    {{ order.address_snapshot.detail }} — کد پستی: {{ order.address_snapshot.postal }}
+  </div>
+  {% endif %}
+
+  <table>
+    <thead>
+      <tr><th>کالا</th><th>رنگ/سایز</th><th>تعداد</th><th>قیمت واحد</th><th>مبلغ</th></tr>
+    </thead>
+    <tbody>
+      {% for item in order.items.all %}
+      <tr>
+        <td>{{ item.name }}</td>
+        <td>{{ item.color_name }} / {{ item.size }}</td>
+        <td>{{ item.qty }}</td>
+        <td>{{ item.unit_price|intcomma }} ت</td>
+        <td>{{ item.line_total|intcomma }} ت</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="totals">
+    <div class="row"><span>مجموع کالاها</span><span>{{ order.subtotal|intcomma }} ت</span></div>
+    {% if order.discount %}<div class="row" style="color:#e53935"><span>تخفیف</span><span>- {{ order.discount|intcomma }} ت</span></div>{% endif %}
+    <div class="row"><span>ارسال</span><span>{% if order.shipping == 0 %}رایگان{% else %}{{ order.shipping|intcomma }} ت{% endif %}</span></div>
+    <div class="row grand"><span>مبلغ نهایی</span><span>{{ order.total|intcomma }} تومان</span></div>
+  </div>
+
+  <div style="margin-top:20px;font-size:12px;color:#4a4a4a;display:flex;justify-content:space-between">
+    <span>شماره سفارش: <b>{{ order.code }}</b></span>
+    <span>تاریخ: {{ order.created_at|date:"Y/m/d H:i" }}</span>
+    {% if order.transactions.first.ref_id %}
+    <span>کد پیگیری بانک: <b>{{ order.transactions.first.ref_id }}</b></span>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+</body>
+</html>

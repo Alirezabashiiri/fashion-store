@@ -28,6 +28,25 @@
 - تراکنش‌های اتمیک (`transaction.atomic`) برای کسر موجودی + ثبت سفارش
 - امنیت: `@login_required` و `@staff_member_required` معادل‌سازی شده با requireUser/requireAdmin
 
+## 🐍 بک‌اند پایتون/Django (برای انتشار عمومی)
+
+یک بک‌اند کامل و مستقل Django در پوشه‌ی **`backend/** ساخته شده است که می‌توانید آن را جداگانه روی هر هاست پایتونی (PythonAnywhere، VPS، Docker) deploy کنید.
+
+```bash
+cd backend
+pip install -r requirements.txt
+cp .env.example .env
+python manage.py migrate
+python manage.py seed
+python manage.py runserver 8000
+```
+
+- **Django Admin**: `http://localhost:8000/admin/` (مدیر: ۰۹۰۰۰۰۰۰۰۰۰۰ / admin12345)
+- **JSON API**: همان مسیرهای Next.js → فرانت‌اند با تنظیم `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` به Django متصل می‌شود
+- شامل: TabularInline برای متغیرها، رنگ‌بندی وضعیت سفارش‌ها، اکشن‌های دسته‌جمعی، چاپ فاکتور، شاپرک با `transaction.atomic`، آپلود تصویر Pillow
+
+📖 جزئیات کامل در `backend/README.md`.
+
 ## 🛠 تکنولوژی
 
 | لایه | تکنولوژی |
